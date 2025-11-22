@@ -77,7 +77,7 @@ SHIFT_TEMPLATES = {
 SHIFT_ORDER = ["09-17", "14-23", "10-18", "12-20"]
 
 # --- شیفت‌های اجباری فقط در چیدمان نفرات ---
-# ✅ حداقل نفرات شب = 2
+# حداقل نفرات: صبح 1 نفر، شب 2 نفر
 MANDATORY_SLOTS = ["09-17", "14-23", "14-23"]
 MANDATORY_TOTAL = len(MANDATORY_SLOTS)  # =3
 
@@ -94,20 +94,43 @@ def mandatory_baseline_coverage():
             baseline[h] += 1
     return baseline
 
+# وزن ساعات: صبح زود کم‌اهمیت، میانی/عصر مهم‌تر
+HOUR_WEIGHTS = {
+    **{h: 0.2 for h in range(9, 12)},   # 9-11 کم
+    **{h: 1.0 for h in range(12, 15)},  # 12-14 نرمال
+    **{h: 1.2 for h in range(15, 21)},  # 15-20 مهم‌تر (میانی/عصر)
+    **{h: 1.0 for h in range(21, 24)},  # 21-23 نرمال
+}
+
 def allocate_shifts_for_day(hourly_need):
     """
-    محاسبه‌ی هدکانت مورد نیاز شیفت‌ها (دیتامحور، بدون حداقل اجباری)
+    محاسبه‌ی هدکانت مورد نیاز شیفت‌ها (دیتامحور)
+    با ترجیح شیفت‌های میانی وقتی 9-12 نیاز کم است.
     """
     remaining = hourly_need.copy()
     shift_counts = {k: 0 for k in SHIFT_TEMPLATES}
 
     for _ in range(500):
-        best_shift, best_cover = None, 0
+        best_shift, best_score = None, 0.0
+
         for sh, hours in SHIFT_TEMPLATES.items():
-            cover = sum(1 for h in hours if remaining.get(h, 0) > 0)
-            if cover > best_cover:
-                best_cover, best_shift = cover, sh
-        if best_cover == 0:
+            weighted_cover = sum(
+                HOUR_WEIGHTS.get(h, 1.0)
+                for h in hours
+                if remaining.get(h, 0) > 0
+            )
+
+            morning_waste = sum(
+                1 for h in hours
+                if h in range(9, 12) and remaining.get(h, 0) == 0
+            )
+
+            score = weighted_cover - 0.15 * morning_waste
+
+            if score > best_score:
+                best_score, best_shift = score, sh
+
+        if best_shift is None or best_score <= 0:
             break
 
         shift_counts[best_shift] += 1
@@ -171,7 +194,7 @@ def build_schedule_with_constraints(days, experts, off_per_expert, daily_shift_c
 
     for di, d in enumerate(days):
         dkey = d.strftime("%Y-%m-%d")
-        need = daily_shift_counts.get(dkey, {})
+        need = daily_shift_counts.get(dkey, {})  # نیاز دیتامحورِ اضافه
 
         is_peak = jalali_weekday_name(d) == peak_day
 
@@ -200,10 +223,10 @@ def build_schedule_with_constraints(days, experts, off_per_expert, daily_shift_c
         working = [e for e in experts if e not in off_today]
         working = working[ptr:] + working[:ptr]
 
-        # --- ساخت اسلات‌ها: اول شیفت‌های اجباری ---
+        # --- اول اسلات‌های اجباری ---
         slots = MANDATORY_SLOTS.copy()
 
-        # بعد نیاز محاسبه‌شده دیتامحور
+        # بعد نیاز دیتامحور اضافه
         for sh in SHIFT_ORDER:
             slots += [sh] * need.get(sh, 0)
 
@@ -254,6 +277,9 @@ with st.sidebar:
 
     experts_text = st.text_area("اسم کارشناس‌ها (با کاما جدا کن)", "Ali, Sara, Reza, Mina")
     experts = [x.strip() for x in experts_text.split(",") if x.strip()]
+
+    if len(experts) < MANDATORY_TOTAL:
+        st.warning("⚠️ تعداد کارشناسان کمتر از حداقل لازم برای شیفت‌های اجباری است (حداقل ۳ نفر). OFF عملاً صفر می‌شود.")
 
     off_per_expert = st.number_input("تعداد OFF هر کارشناس در ۳۰ روز آینده", min_value=0, value=6)
 
@@ -327,7 +353,7 @@ if uploaded and experts:
 
     future_days = next_jalali_days(start_j, 30)
 
-    # ✅ baseline پوشش شیفت‌های اجباری
+    # baseline پوشش اجباری
     baseline = mandatory_baseline_coverage()
 
     daily_shift_counts = {}
@@ -361,12 +387,11 @@ if uploaded and experts:
                 "sla_threshold_sec": t_sec
             })
 
-        # ✅ کم کردن پوشش اجباری از نیاز ساعتی
-        remaining_need = {}
-        for h, need_val in hourly_need.items():
-            remaining_need[h] = max(0, need_val - baseline.get(h, 0))
+        # کم کردن پوشش اجباری از نیاز ساعتی
+        remaining_need = {h: max(0, need_val - baseline.get(h, 0))
+                          for h, need_val in hourly_need.items()}
 
-        # نیاز شیفت‌ها فقط از روی باقی‌مانده محاسبه می‌شود
+        # نیاز شیفت‌های اضافه فقط از روی باقی‌مانده
         shifts_needed = allocate_shifts_for_day(remaining_need)
         daily_shift_counts[date_str] = shifts_needed
 
@@ -375,7 +400,7 @@ if uploaded and experts:
     st.subheader("۲) هدکانت ساعتی پیش‌بینی‌شده (۳۰ روز آینده)")
     st.dataframe(hourly_df, use_container_width=True)
 
-    st.subheader("۳) هدکانت مورد نیاز شیفت هر روز")
+    st.subheader("۳) هدکانت مورد نیاز شیفت هر روز (بعد از کسر پوشش اجباری)")
     daily_df = pd.DataFrame(
         [{"date": d, **c} for d, c in daily_shift_counts.items()]
     )
