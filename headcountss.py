@@ -11,7 +11,7 @@ import matplotlib.pyplot as plt
 LOGO_PATH = "jabama_logo.png"
 if os.path.exists(LOGO_PATH):
     st.image(LOGO_PATH, width=180)
-st.title("📊 برنامه‌ریز هدکانت و شیفت با Erlang C — برنامه ۳۰ روز آینده")
+st.title("📊 برنامه‌ریز هدکانت و شیفت با Erlang")
 
 # =========================
 # Erlang C
@@ -82,8 +82,7 @@ MANDATORY_TOTAL = len(MANDATORY_SLOTS)  # =2
 
 def allocate_shifts_for_day(hourly_need):
     """
-    محاسبه‌ی نیاز شیفت‌ها (فقط دیتامحور)
-    ❌ هیچ حداقل اجباری اینجا اعمال نمی‌شود
+    محاسبه‌ی هدکانت مورد نیاز شیفت‌ها
     """
     remaining = hourly_need.copy()
     shift_counts = {k: 0 for k in SHIFT_TEMPLATES}
@@ -351,10 +350,10 @@ if uploaded and experts:
 
     hourly_df = pd.DataFrame(hourly_results)
 
-    st.subheader("۲) نیاز هدکانت ساعتی پیش‌بینی‌شده (۳۰ روز آینده)")
+    st.subheader("۲) هدکانت ساعتی پیش‌بینی‌شده (۳۰ روز آینده)")
     st.dataframe(hourly_df, use_container_width=True)
 
-    st.subheader("۳) نیاز شیفت هر روز (فقط دیتامحور، بدون حداقل اجباری)")
+    st.subheader("۳) هدکانت مورد نیاز شیفت هر روز ")
     daily_df = pd.DataFrame(
         [{"date": d, **c} for d, c in daily_shift_counts.items()]
     )
@@ -405,7 +404,7 @@ if uploaded and experts:
     st.subheader("۴) SLA احتمالی هر روز با شیفت‌های واقعی")
     st.dataframe(daily_sla_df, use_container_width=True)
 
-    st.subheader("۵) جدول نهایی شیفت ۳۰ روز آینده (دو شیفت ثابت همیشه پر هستند)")
+    st.subheader("۵) جدول نهایی شیفت ۳۰ روز آینده")
     schedule_df.index = new_index
     st.dataframe(schedule_df.style.applymap(color_shifts), use_container_width=True)
 
@@ -419,3 +418,4 @@ if uploaded and experts:
 
 else:
     st.info("👈 فایل را آپلود کن و اسامی کارشناسان را وارد کن.")
+
