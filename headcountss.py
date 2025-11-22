@@ -74,12 +74,12 @@ SHIFT_TEMPLATES = {
     "10-18": list(range(10, 18)),
     "12-20": list(range(12, 20)),
 }
-SHIFT_ORDER = ["09-17", "14-23", "10-18", "12-20"]
+SHIFT_ORDER = ["09-17", "14-23", "11-19", "12-20"]
 
 # --- شیفت‌های اجباری فقط در چیدمان نفرات ---
 # حداقل نفرات: صبح 1 نفر، شب 2 نفر
-MANDATORY_SLOTS = ["09-17", "14-23", "14-23"]
-MANDATORY_TOTAL = len(MANDATORY_SLOTS)  # =3
+MANDATORY_SLOTS = ["09-17", "14-23", "11-19"]
+MANDATORY_TOTAL = len(MANDATORY_SLOTS)  # =4
 
 def mandatory_baseline_coverage():
     """
@@ -465,3 +465,4 @@ if uploaded and experts:
 
 else:
     st.info("👈 فایل را آپلود کن و اسامی کارشناسان را وارد کن.")
+
