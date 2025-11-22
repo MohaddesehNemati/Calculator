@@ -8,7 +8,7 @@ import matplotlib.pyplot as plt
 # =========================
 # Header (Jabama logo)
 # =========================
-LOGO_PATH = "jabama_logo.png"  # کنار app.py بذار
+LOGO_PATH = "jabama_logo.png"
 if os.path.exists(LOGO_PATH):
     st.image(LOGO_PATH, width=180)
 st.title("📊 برنامه‌ریز هدکانت و شیفت با Erlang")
@@ -42,7 +42,6 @@ def required_agents_erlang(volume_per_hour, aht_sec, sl_target=0.8, t_sec=20):
             return n, a, sl
         n += 1
 
-
 # =========================
 # Jalali helpers
 # =========================
@@ -66,43 +65,29 @@ def jalali_weekday_name(jd: jdatetime.date):
 def next_jalali_days(start_date: jdatetime.date, n_days: int):
     return [start_date + jdatetime.timedelta(days=i) for i in range(n_days)]
 
-
 # =========================
 # Shifts (MAX 4 MODELS)
-# ثابت‌ها همیشه حداقل ۱ نفر دارند
 # =========================
 SHIFT_TEMPLATES = {
-    "09-17": list(range(9, 17)),   # 9-16
-    "14-23": list(range(14, 23)),  # 14-22 (تا 23)
+    "09-17": list(range(9, 17)),
+    "14-23": list(range(14, 23)),
     "10-18": list(range(10, 18)),
     "12-20": list(range(12, 20)),
 }
-
-# ترتیب اسلات‌ها: ثابت‌ها اول
 SHIFT_ORDER = ["09-17", "14-23", "10-18", "12-20"]
 
-# حداقل ثابت‌ها «برای هر روز» (بدون شرط)
-FIXED_MINIMUM = {"09-17": 1, "14-23": 1}
-FIXED_TOTAL = sum(FIXED_MINIMUM.values())  # =2
+# --- این دو شیفت فقط در چیدمان نفرات اجباری‌اند ---
+MANDATORY_SLOTS = ["09-17", "14-23"]  # برای Schedule
+MANDATORY_TOTAL = len(MANDATORY_SLOTS)  # =2
 
 def allocate_shifts_for_day(hourly_need):
     """
-    1) همیشه دو شیفت ثابت را حداقل ۱ نفر می‌گذارد (حتی اگر تقاضا صفر باشد)
-    2) باقی را با greedy بین همین ۴ مدل می‌چیند
-    خروجی: dict shift->count
+    محاسبه‌ی نیاز شیفت‌ها (فقط دیتامحور)
+    ❌ هیچ حداقل اجباری اینجا اعمال نمی‌شود
     """
     remaining = hourly_need.copy()
     shift_counts = {k: 0 for k in SHIFT_TEMPLATES}
 
-    # fixed minimum ALWAYS
-    for sh, min_count in FIXED_MINIMUM.items():
-        for _ in range(min_count):
-            shift_counts[sh] += 1
-            for h in SHIFT_TEMPLATES[sh]:
-                if remaining.get(h, 0) > 0:
-                    remaining[h] = max(0, remaining[h] - 1)
-
-    # greedy fill for unmet demand
     for _ in range(500):
         best_shift, best_cover = None, 0
         for sh, hours in SHIFT_TEMPLATES.items():
@@ -119,9 +104,8 @@ def allocate_shifts_for_day(hourly_need):
 
     return shift_counts
 
-
 # =========================
-# SLA achieved from actual assigned staff
+# SLA achieved from actual schedule
 # =========================
 def achieved_sla_for_day(date_j, schedule_row, avg_hourly, aht_sec, t_sec, peak_day, peak_multiplier):
     per_hour_sla = {}
@@ -152,14 +136,13 @@ def achieved_sla_for_day(date_j, schedule_row, avg_hourly, aht_sec, t_sec, peak_
     daily_avg = sum(per_hour_sla.values()) / len(per_hour_sla) if per_hour_sla else 1.0
     return per_hour_sla, daily_min, daily_avg
 
-
 # =========================
 # Schedule builder with constraints
 # - Peak day: OFF تا حد امکان صفر
 # - No 3 OFF in a row
 # - OFF count must be met
-# - BUT fixed shifts can NEVER be removed:
-#   working >= FIXED_TOTAL everyday
+# - BUT schedule must ALWAYS include:
+#   at least 1 person in 09-17 and 1 in 14-23
 # =========================
 def build_schedule_with_constraints(days, experts, off_per_expert, daily_shift_counts, peak_day):
     offs_left = {e: off_per_expert for e in experts}
@@ -175,14 +158,13 @@ def build_schedule_with_constraints(days, experts, off_per_expert, daily_shift_c
 
     for di, d in enumerate(days):
         dkey = d.strftime("%Y-%m-%d")
-        need = daily_shift_counts.get(dkey, {})
+        need = daily_shift_counts.get(dkey, {})  # نیاز دیتامحور (ممکنه برای ثابت‌ها 0 باشه)
 
         is_peak = jalali_weekday_name(d) == peak_day
 
-        # سقف OFF روزانه طوری که ثابت‌ها همیشه پر بمونن
-        max_off_today = 0 if is_peak else max(0, len(experts) - FIXED_TOTAL)
+        # سقف OFF روزانه طوری که حداقل ۲ نفر برای دو شیفت اجباری بمانند
+        max_off_today = 0 if is_peak else max(0, len(experts) - MANDATORY_TOTAL)
 
-        # فشار برای پخش OFF در کل دوره
         remaining_days_including_today = total_days - di
         total_off_remaining = sum(offs_left.values())
         avg_needed_today = math.ceil(total_off_remaining / remaining_days_including_today) if remaining_days_including_today > 0 else 0
@@ -205,16 +187,12 @@ def build_schedule_with_constraints(days, experts, off_per_expert, daily_shift_c
         working = [e for e in experts if e not in off_today]
         working = working[ptr:] + working[:ptr]
 
-        # ساخت اسلات‌ها (ثابت‌ها همیشه حداقل ۱ تا دارند)
-        slots = []
+        # --- ساخت اسلات‌ها: اول دو اسلات اجباری ---
+        slots = MANDATORY_SLOTS.copy()
+
+        # بعد نیاز محاسبه‌شده دیتامحور (اگر همون شیفت‌ها دوباره اومدن مشکلی نیست)
         for sh in SHIFT_ORDER:
             slots += [sh] * need.get(sh, 0)
-
-        # اگر هنوز slots خالی بود (مثلاً فایل عجیب)، حداقل ثابت‌ها رو دستی اضافه کن
-        if need.get("09-17", 0) < 1:
-            slots.insert(0, "09-17")
-        if need.get("14-23", 0) < 1:
-            slots.insert(1, "14-23")
 
         # تخصیص شیفت به working
         for i, e in enumerate(working):
@@ -238,7 +216,6 @@ def build_schedule_with_constraints(days, experts, off_per_expert, daily_shift_c
 
     return schedule
 
-
 # =========================
 # Coloring
 # =========================
@@ -255,7 +232,6 @@ def color_shifts(val):
     v = str(val)
     color = COLOR_MAP.get(v, "white")
     return f"background-color: {color}; font-weight: 600; text-align: center;"
-
 
 # =========================
 # Sidebar
@@ -338,8 +314,8 @@ if uploaded and experts:
 
     future_days = next_jalali_days(start_j, 30)
 
-    hourly_results = []
     daily_shift_counts = {}
+    hourly_results = []
 
     for jd in future_days:
         date_str = jd.strftime("%Y-%m-%d")
@@ -366,19 +342,25 @@ if uploaded and experts:
                 "hour": h,
                 "forecast_volume": round(vol_used, 1),
                 "required_agents": n_eff,
-                "service_level_target": sl_target,
                 "sla_threshold_sec": t_sec
             })
 
-        shifts = allocate_shifts_for_day(hourly_need)
-        daily_shift_counts[date_str] = shifts
+        # نیاز شیفت‌ها (بدون حداقل اجباری)
+        shifts_needed = allocate_shifts_for_day(hourly_need)
+        daily_shift_counts[date_str] = shifts_needed
 
-    st.subheader("۲) تعداد شیفت موردنیاز هر روز (ثابت‌ها همیشه حداقل ۱)")
+    hourly_df = pd.DataFrame(hourly_results)
+
+    st.subheader("۲) نیاز هدکانت ساعتی پیش‌بینی‌شده (۳۰ روز آینده)")
+    st.dataframe(hourly_df, use_container_width=True)
+
+    st.subheader("۳) نیاز شیفت هر روز (فقط دیتامحور، بدون حداقل اجباری)")
     daily_df = pd.DataFrame(
         [{"date": d, **c} for d, c in daily_shift_counts.items()]
     )
     st.dataframe(daily_df, use_container_width=True)
 
+    # چیدمان نفرات با سیاست اجباری ثابت‌ها
     schedule_df = build_schedule_with_constraints(
         days=future_days,
         experts=experts,
@@ -404,13 +386,11 @@ if uploaded and experts:
             peak_multiplier=peak_multiplier
         )
 
-        req = daily_shift_counts.get(dkey, {})
         assigned_working = int((row != "OFF").sum())
 
         day_rows.append({
             "date": dkey,
             "weekday": jalali_weekday_name(jd),
-            "required_shift_total": int(sum(req.values())) if req else 0,
             "assigned_working": assigned_working,
             "achieved_min_SL": round(daily_min * 100, 1),
             "achieved_avg_SL": round(daily_avg * 100, 1),
@@ -422,14 +402,14 @@ if uploaded and experts:
 
     daily_sla_df = pd.DataFrame(day_rows)
 
-    st.subheader("۳) SLA احتمالی هر روز با شیفت‌های واقعی")
+    st.subheader("۴) SLA احتمالی هر روز با شیفت‌های واقعی")
     st.dataframe(daily_sla_df, use_container_width=True)
 
-    st.subheader("۴) جدول نهایی شیفت ۳۰ روز آینده (09-17 و 14-23 همیشه پر هستند)")
+    st.subheader("۵) جدول نهایی شیفت ۳۰ روز آینده (دو شیفت ثابت همیشه پر هستند)")
     schedule_df.index = new_index
     st.dataframe(schedule_df.style.applymap(color_shifts), use_container_width=True)
 
-    st.subheader("۵) نمودار میانگین ورودی روزانه به ازای هر ساعت (تاریخی)")
+    st.subheader("۶) نمودار میانگین ورودی روزانه به ازای هر ساعت (تاریخی)")
     fig, ax = plt.subplots()
     ax.bar(avg_hourly.index, avg_hourly.values)
     ax.set_xlabel("Hour")
