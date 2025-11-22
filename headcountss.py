@@ -408,7 +408,7 @@ if uploaded and experts:
     schedule_df.index = new_index
     st.dataframe(schedule_df.style.applymap(color_shifts), use_container_width=True)
 
-    st.subheader("۶) نمودار میانگین ورودی روزانه به ازای هر ساعت (تاریخی)")
+    st.subheader("۶) نمودار میانگین ورودی روزانه به ازای هر ساعت")
     fig, ax = plt.subplots()
     ax.bar(avg_hourly.index, avg_hourly.values)
     ax.set_xlabel("Hour")
@@ -418,5 +418,6 @@ if uploaded and experts:
 
 else:
     st.info("👈 فایل را آپلود کن و اسامی کارشناسان را وارد کن.")
+
 
 
