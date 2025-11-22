@@ -11,7 +11,7 @@ import matplotlib.pyplot as plt
 LOGO_PATH = "jabama_logo.png"
 if os.path.exists(LOGO_PATH):
     st.image(LOGO_PATH, width=180)
-st.title("📊 برنامه‌ریز هدکانت و شیفت با Erlang")
+st.title("📊 برنامه‌ریز هدکانت و شیفت با Erlang C — برنامه ۳۰ روز آینده")
 
 # =========================
 # Erlang C
