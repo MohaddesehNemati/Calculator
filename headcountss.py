@@ -4,26 +4,30 @@ import math
 import jdatetime
 import matplotlib.pyplot as plt
 
-# ----------------------------
-# Erlang C functions
-# ----------------------------
+# =========================
+# Erlang C
+# =========================
 def erlang_c_probability_wait(a, n):
+    """P(wait) in Erlang C"""
     if n <= a:
         return 1.0
-    s = sum((a**k)/math.factorial(k) for k in range(n))
-    pn = (a**n)/math.factorial(n) * (n/(n-a))
+    s = sum((a**k) / math.factorial(k) for k in range(n))
+    pn = (a**n) / math.factorial(n) * (n / (n - a))
     return pn / (s + pn)
 
 def erlang_c_service_level(a, n, aht_sec, t_sec):
+    """Service level: P(answer within t)"""
     pw = erlang_c_probability_wait(a, n)
     mu = 1 / aht_sec
     expo = math.exp(-(n - a) * mu * t_sec)
     return 1 - pw * expo
 
 def required_agents_erlang(volume_per_hour, aht_sec, sl_target=0.8, t_sec=20):
-    lam = volume_per_hour / 3600.0
-    mu = 1 / aht_sec
-    a = lam / mu
+    """Minimal n meeting SLA"""
+    lam = volume_per_hour / 3600.0  # arrivals per second
+    mu = 1 / aht_sec                # services per second per agent
+    a = lam / mu                    # offered load in Erlangs
+
     n = max(1, math.ceil(a))
     while True:
         sl = erlang_c_service_level(a, n, aht_sec, t_sec)
@@ -31,35 +35,62 @@ def required_agents_erlang(volume_per_hour, aht_sec, sl_target=0.8, t_sec=20):
             return n, a, sl
         n += 1
 
-# ----------------------------
-# Shift templates
-# ----------------------------
+# =========================
+# Shifts
+# =========================
 SHIFT_TEMPLATES = {
-    "M": list(range(8, 16)),   # 8-15
+    "M": list(range(8, 16)),   # 08-15
     "E": list(range(12, 20)),  # 12-19
     "N": list(range(16, 24))   # 16-23
 }
 
+SHIFT_LABELS = {
+    "M": "M 08-16",
+    "E": "E 12-20",
+    "N": "N 16-24",
+    "OFF": "OFF"
+}
+
 def allocate_shifts_for_day(hourly_need):
+    """
+    Greedy allocation of counts per shift based on hourly_need.
+    hourly_need: dict {hour: agents_required}
+    """
     remaining = hourly_need.copy()
     shift_counts = {k: 0 for k in SHIFT_TEMPLATES}
+
     for _ in range(500):
         best_shift, best_cover = None, 0
+
         for sh, hours in SHIFT_TEMPLATES.items():
             cover = sum(1 for h in hours if remaining.get(h, 0) > 0)
             if cover > best_cover:
                 best_cover, best_shift = cover, sh
+
         if best_cover == 0:
             break
+
         shift_counts[best_shift] += 1
         for h in SHIFT_TEMPLATES[best_shift]:
             if remaining.get(h, 0) > 0:
                 remaining[h] -= 1
+
     return shift_counts
 
-# ----------------------------
-# Jalali month generator
-# ----------------------------
+# =========================
+# Jalali helpers
+# =========================
+def normalize_date_str(x):
+    s = str(x).strip().replace("/", "-")
+    return s
+
+def parse_jalali_date_safe(s):
+    try:
+        y, m, d = map(int, s.split("-"))
+        return jdatetime.date(y, m, d)
+    except:
+        return None
+
 def jalali_month_days(year, month):
     first_day = jdatetime.date(year, month, 1)
     if month <= 6:
@@ -70,25 +101,47 @@ def jalali_month_days(year, month):
         days = 30 if first_day.isleap() else 29
     return [jdatetime.date(year, month, d) for d in range(1, days + 1)]
 
-# ----------------------------
-# Scheduler
-# ----------------------------
+def jalali_weekday_name(jd: jdatetime.date):
+    wd_map = {
+        0:"دوشنبه",1:"سه‌شنبه",2:"چهارشنبه",3:"پنجشنبه",
+        4:"جمعه",5:"شنبه",6:"یکشنبه"
+    }
+    return wd_map[jd.weekday()]
+
+# =========================
+# Schedule builder
+# =========================
 def build_month_schedule(days, experts, off_per_expert, daily_shift_counts):
+    """
+    days: list of jdatetime.date
+    experts: list of names
+    off_per_expert: int
+    daily_shift_counts: dict {date_str: {"M":x,"E":y,"N":z}}
+    """
     offs_left = {e: off_per_expert for e in experts}
     schedule = pd.DataFrame(
         index=[d.strftime("%Y-%m-%d") for d in days],
         columns=experts
     )
+
     ptr = 0
     for d in days:
         dkey = d.strftime("%Y-%m-%d")
         need = daily_shift_counts.get(dkey, {"M":0,"E":0,"N":0})
+
+        # اگر برای این روز داده نداریم -> همه OFF (بدون مصرف آف)
+        if sum(need.values()) == 0:
+            for e in experts:
+                schedule.loc[dkey, e] = SHIFT_LABELS["OFF"]
+            continue
+
         slots = (["M"] * need["M"]) + (["E"] * need["E"]) + (["N"] * need["N"])
 
         extra = max(0, len(experts) - len(slots))
         off_today = []
         idxs = list(range(len(experts)))
 
+        # OFF دادن به نفرات اضافی
         for _ in range(extra):
             for i in idxs:
                 e = experts[(ptr + i) % len(experts)]
@@ -100,34 +153,35 @@ def build_month_schedule(days, experts, off_per_expert, daily_shift_counts):
         working = [e for e in experts if e not in off_today]
         working = working[ptr:] + working[:ptr]
 
+        # تخصیص شیفت
         for i, e in enumerate(working):
             if i < len(slots):
-                schedule.loc[dkey, e] = slots[i]
+                schedule.loc[dkey, e] = SHIFT_LABELS.get(slots[i], slots[i])
             else:
                 if offs_left[e] > 0:
-                    schedule.loc[dkey, e] = "OFF"
                     offs_left[e] -= 1
+                    schedule.loc[dkey, e] = SHIFT_LABELS["OFF"]
                 else:
-                    schedule.loc[dkey, e] = "M"
+                    schedule.loc[dkey, e] = SHIFT_LABELS["M"]
 
         for e in off_today:
-            schedule.loc[dkey, e] = "OFF"
+            schedule.loc[dkey, e] = SHIFT_LABELS["OFF"]
 
         ptr = (ptr + 1) % len(experts)
 
     return schedule
 
-# ============================
+# =========================
 # Streamlit UI
-# ============================
+# =========================
 st.set_page_config(page_title="Erlang Shift Planner", layout="wide")
-st.title("📊 برنامه‌ریز هدکانت و شیفت با Erlang C (تاریخ شمسی)")
+st.title("📊 برنامه‌ریز هدکانت و شیفت با Erlang C (بر اساس تاریخ شمسی)")
 
 with st.sidebar:
     st.header("ورودی‌ها")
 
     year = st.number_input("سال شمسی", min_value=1390, max_value=1500, value=1404)
-    month = st.number_input("ماه شمسی (1-12)", min_value=1, max_value=12, value=7)
+    month = st.number_input("ماه شمسی (1-12)", min_value=1, max_value=12, value=8)
 
     experts_text = st.text_area("اسم کارشناس‌ها (با کاما جدا کن)", "Ali, Sara, Reza, Mina")
     experts = [x.strip() for x in experts_text.split(",") if x.strip()]
@@ -149,13 +203,11 @@ with st.sidebar:
 
 uploaded = st.file_uploader("فایل ورودی (xlsx یا csv)", type=["xlsx", "csv"])
 
-def normalize_date_str(x):
-    # 1404/07/01 -> 1404-07-01
-    s = str(x).strip()
-    s = s.replace("/", "-")
-    return s
-
+# =========================
+# Main
+# =========================
 if uploaded and experts:
+
     # ---- read file
     if uploaded.name.lower().endswith(".xlsx"):
         raw = pd.read_excel(uploaded)
@@ -163,63 +215,75 @@ if uploaded and experts:
         raw = pd.read_csv(uploaded)
 
     raw.columns = [str(c).strip() for c in raw.columns]
+    cols = list(raw.columns)
 
-    # ---- detect format
-    if set(["date", "hour", "volume"]).issubset({c.lower() for c in raw.columns}):
-        df = raw.copy()
-        df.columns = [c.lower() for c in df.columns]
-        df["date"] = df["date"].apply(normalize_date_str)
-        df["hour"] = df["hour"].astype(int)
-        df["volume"] = df["volume"].astype(float)
+    # ---- detect date/hour columns
+    date_col = next((c for c in cols if c in ["تاریخ تماس", "date", "تاریخ"]), None)
+    hour_col = next((c for c in cols if str(c).lower() == "hour"), None)
+
+    if not date_col or not hour_col:
+        st.error("ستون‌های فایل باید حداقل شامل «تاریخ تماس» و «hour» باشد.")
+        st.stop()
+
+    # ---- detect volume column smartly
+    candidate_vol_cols = [c for c in cols if c not in [date_col, hour_col]]
+    vol_col = None
+
+    # 1) explicit names
+    for c in candidate_vol_cols:
+        cl = str(c).lower()
+        if ("تعداد" in str(c)) or ("volume" in cl) or ("count" in cl):
+            vol_col = c
+            break
+
+    # 2) first numeric col
+    if vol_col is None:
+        for c in candidate_vol_cols:
+            if pd.api.types.is_numeric_dtype(raw[c]):
+                vol_col = c
+                break
+
+    df = raw[[date_col, hour_col] + ([vol_col] if vol_col else [])].copy()
+    df.rename(columns={date_col: "date", hour_col: "hour"}, inplace=True)
+
+    df["date"] = df["date"].apply(normalize_date_str)
+
+    # حذف ردیف‌های غیرتاریخی مثل Grand Total
+    df = df[df["date"].str.match(r"^\d{4}-\d{1,2}-\d{1,2}$", na=False)]
+
+    # hour -> numeric
+    df["hour"] = pd.to_numeric(df["hour"], errors="coerce")
+    df = df.dropna(subset=["hour"])
+    df["hour"] = df["hour"].astype(int)
+
+    if vol_col:
+        df.rename(columns={vol_col:"volume"}, inplace=True)
+        df["volume"] = pd.to_numeric(df["volume"], errors="coerce").fillna(0)
     else:
-        # Persian sample like yours
-        date_col = "تاریخ تماس" if "تاریخ تماس" in raw.columns else None
-        hour_col = "hour" if "hour" in raw.columns else None
-        vol_col  = "تعداد" if "تعداد" in raw.columns else None
+        df["volume"] = 1.0
 
-        if not date_col or not hour_col:
-            st.error("ستون‌های فایل باید حداقل شامل 'تاریخ تماس' و 'hour' باشد.")
-            st.stop()
-
-        df = raw[[date_col, hour_col] + ([vol_col] if vol_col else [])].copy()
-        df.rename(columns={date_col: "date", hour_col: "hour"}, inplace=True)
-        df["date"] = df["date"].apply(normalize_date_str)
-        df["hour"] = df["hour"].astype(int)
-
-        if vol_col:
-            df.rename(columns={vol_col: "volume"}, inplace=True)
-        else:
-            df["volume"] = 1
-
-        df["volume"] = df["volume"].astype(float)
-
-    # ---- build hourly volumes per day-hour
+    # ---- aggregate to daily-hourly volume
     hourly_vol = (
-        df.groupby(["date", "hour"], as_index=False)["volume"]
+        df.groupby(["date","hour"], as_index=False)["volume"]
           .sum()
-          .rename(columns={"volume": "volume_raw"})
+          .rename(columns={"volume":"volume_raw"})
     )
 
-    # ---- peak-day helper
-    def is_peak(jdate_str):
-        try:
-            y, m, d = map(int, jdate_str.split("-"))
-            jd = jdatetime.date(y, m, d)
-            wd_map = {
-                0:"دوشنبه",1:"سه‌شنبه",2:"چهارشنبه",3:"پنجشنبه",
-                4:"جمعه",5:"شنبه",6:"یکشنبه"
-            }
-            return wd_map[jd.weekday()] == peak_day
-        except:
+    # ---- peak day check
+    def is_peak(date_str):
+        jd = parse_jalali_date_safe(date_str)
+        if jd is None:
             return False
+        return jalali_weekday_name(jd) == peak_day
 
     hourly_results = []
     daily_shift_counts = {}
 
     for date_str, g in hourly_vol.groupby("date"):
         hourly_need = {}
+
         for _, row in g.iterrows():
-            vol_raw = row["volume_raw"]
+            vol_raw = float(row["volume_raw"])
             vol_used = vol_raw * peak_multiplier if is_peak(date_str) else vol_raw
 
             n, a, sl = required_agents_erlang(
@@ -229,6 +293,7 @@ if uploaded and experts:
                 t_sec=t_sec
             )
 
+            # apply shrinkage
             n_eff = math.ceil(n / (1 - shrinkage/100))
             hourly_need[int(row["hour"])] = n_eff
 
@@ -247,8 +312,18 @@ if uploaded and experts:
 
     hourly_df = pd.DataFrame(hourly_results).sort_values(["date","hour"])
 
+    # =========================
+    # Outputs
+    # =========================
     st.subheader("۱) هدکانت لازم به ازای هر ساعت (Erlang C)")
     st.dataframe(hourly_df, use_container_width=True)
+
+    st.download_button(
+        "دانلود جدول هدکانت ساعتی",
+        data=hourly_df.to_csv(index=False).encode("utf-8-sig"),
+        file_name="hourly_headcount.csv",
+        mime="text/csv"
+    )
 
     st.subheader("۲) تعداد شیفت موردنیاز هر روز")
     daily_df = pd.DataFrame(
@@ -267,15 +342,15 @@ if uploaded and experts:
     st.dataframe(schedule_df, use_container_width=True)
 
     st.download_button(
-        "دانلود خروجی CSV",
+        "دانلود جدول شیفت ماه",
         data=schedule_df.to_csv().encode("utf-8-sig"),
         file_name=f"schedule_{year}_{month}.csv",
         mime="text/csv"
     )
 
-    # ----------------------------
-    # 4) Bar chart: average daily inputs per hour
-    # ----------------------------
+    # =========================
+    # Chart: Avg daily volume per hour
+    # =========================
     st.subheader("۴) نمودار میانگین ورودی روزانه به ازای هر ساعت")
 
     avg_hourly = (
