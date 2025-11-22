@@ -300,7 +300,7 @@ if uploaded and experts:
                   .reindex(range(9,24), fill_value=0)
     )
 
-    st.subheader("۱) پروفایل میانگین ورودیِ تاریخی (ساعتی)")
+    st.subheader("۱) میانگین ورودیِ(ساعتی)")
     st.dataframe(
         avg_hourly.reset_index().rename(columns={"hour":"hour", "volume_raw":"avg_volume"}),
         use_container_width=True
@@ -418,4 +418,5 @@ if uploaded and experts:
 
 else:
     st.info("👈 فایل را آپلود کن و اسامی کارشناسان را وارد کن.")
+
 
