@@ -11,7 +11,7 @@ import matplotlib.pyplot as plt
 LOGO_PATH = "jabama_logo.png"
 if os.path.exists(LOGO_PATH):
     st.image(LOGO_PATH, width=180)
-st.title("📊 برنامه‌ریز هدکانت و شیفت با Erlang")
+st.title("📊 برنامه‌ریز هدکانت و شیفت با ارلنگ")
 
 # =========================
 # Erlang C
@@ -418,6 +418,7 @@ if uploaded and experts:
 
 else:
     st.info("👈 فایل را آپلود کن و اسامی کارشناسان را وارد کن.")
+
 
 
 
